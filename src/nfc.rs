@@ -11,15 +11,16 @@
 //! - GPIO11 = SCLK (SCK)
 //! - GPIO22 = NSS  (SDA)
 //!
-
-// https://gitlab.com/jspngh/mfrc522/-/tree/main/examples/rpi4
+// CREDIT: based on code found in this repo -> https://gitlab.com/jspngh/mfrc522/-/tree/main/examples/rpi4
 
 use linux_embedded_hal as hal;
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::hash::Hash;
-use std::io::Write;
+
+use std::thread;
+use std::time::Duration;
+
+use embedded_hal::digital::PinState;
 
 use anyhow::Result;
 use embedded_hal::delay::DelayNs;
@@ -29,13 +30,44 @@ use hal::{Delay, SpidevBus, SysfsPin};
 use mfrc522::comm::{Interface, blocking::spi::SpiInterface};
 use mfrc522::{Initialized, Mfrc522};
 
-const PIN: u8 = 22;
+const PIN: u8 = 22; // physical pin number not the GPIO.
 const SCAN_DELAY_MS: u16 = 1000;
+const OPERATING_SYSTEM: &str = std::env::consts::OS;
+
+fn get_spi() -> Result<SpidevBus, bool> {
+    let spi = match SpidevBus::open("/dev/spidev0.0") {
+        Ok(spi) => spi, // return the spi device if we successfully opened it as a SpidevBus
+        Err(e) => {
+            println!("Failed to open SPI device: {:?}", e);
+            return Err(false);
+        }
+    };
+    Ok(spi)
+}
+
+fn is_linux_os() -> Result<bool> {
+    if OPERATING_SYSTEM != "linux" {
+        println!(
+            "
+            \nLINUX OS REQUIRED.
+            \nDETECTED: {OPERATING_SYSTEM}.
+            \nPROGRAM TERMINATED.\n
+            "
+        );
+        return Ok(false);
+    }
+    Ok(true) // os is linux
+}
 
 pub fn read() -> Result<()> {
-    #[allow(nonstandard_style)]
+    
+    if !is_linux_os()? {
+        return Ok(());
+    }
 
-    let TAGS_HMAP = HashMap::from([ // fake vals for now. add real ones ltr
+    #[allow(nonstandard_style)]
+    let TAGS_HMAP = HashMap::from([
+        // fake vals for now. add real ones ltr
         ([0, 0, 0, 0], "TAG"),
         ([0, 0, 0, 0], "CARD"),
         ([1, 2, 3, 4], "TAG"),
@@ -44,13 +76,25 @@ pub fn read() -> Result<()> {
 
     let mut delay = Delay;
 
-    let mut spi = SpidevBus::open("/dev/spidev0.0").expect("Failed to open SPI device");
-
     // do not change this, these settings are required for the MFRC522 to work properly. (max speed is 10MHz, but we can go lower for stability)
     let options = SpidevOptions::new()
         .max_speed_hz(1_000_000)
         .mode(SpiModeFlags::SPI_MODE_0 | SpiModeFlags::SPI_NO_CS)
         .build();
+
+    // i put it into a loop to avoid crashes that kill the process if the SPI device is not ready when we try to open it.
+    //this way it will keep retrying every 3 seconds until it successfully opens the SPI device, which is more robust and user-friendly than crashing immediately.
+
+    let mut spi = loop {
+        match get_spi() {
+            Ok(s) => break s, // multi threading not needed - loop blocks the current process until condition satisfied
+            Err(_) => {
+                println!("Retrying to open SPI device in 3 second...");
+                thread::sleep(Duration::from_secs(3));
+                continue;
+            }
+        }
+    };
 
     spi.configure(&options)
         .expect("Failed to configure SPI device");
@@ -65,7 +109,7 @@ pub fn read() -> Result<()> {
 
     // check pin exists and ready
     let pin = pin
-        .into_output_pin(embedded_hal::digital::PinState::High)
+        .into_output_pin(PinState::High)
         .expect("Failed to set pin state");
 
     let spi = ExclusiveDevice::new(spi, pin, Delay)?; // set the chip select pin and delay for the exclusive device
@@ -118,7 +162,8 @@ pub fn read() -> Result<()> {
     }
 }
 
-fn handle_authenticate<E, COMM: Interface<Error = E>, F>( // this block is out of my technical expertise...
+fn handle_authenticate<E, COMM: Interface<Error = E>, F>(
+    // this block is out of my technical expertise...
     mfrc522: &mut Mfrc522<COMM, Initialized>,
     uid: &mfrc522::Uid,
     action: F,
