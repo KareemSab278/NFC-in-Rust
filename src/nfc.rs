@@ -30,7 +30,7 @@ use hal::{Delay, SpidevBus, SysfsPin};
 use mfrc522::comm::{Interface, blocking::spi::SpiInterface};
 use mfrc522::{Initialized, Mfrc522};
 
-const PIN: u8 = 22; // physical pin number not the GPIO.
+const GPIO_PIN: u8 = 22;
 const SCAN_DELAY_MS: u16 = 1000;
 const OPERATING_SYSTEM: &str = std::env::consts::OS;
 
@@ -100,7 +100,7 @@ pub fn read() -> Result<()> {
         .expect("Failed to configure SPI device");
 
     // software-controlled chip select pin
-    let pin = SysfsPin::new(PIN as u64);
+    let pin = SysfsPin::new(GPIO_PIN as u64);
     pin.export().expect("Failed to export pin");
 
     while !pin.is_exported() {}
