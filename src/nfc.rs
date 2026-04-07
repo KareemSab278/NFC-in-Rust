@@ -65,11 +65,9 @@ pub fn read() -> Result<()> {
 
     #[allow(nonstandard_style)]
     let TAGS_HMAP = HashMap::from([
-        // fake vals for now. add real ones ltr
-        ([0, 0, 0, 0], "TAG"),
-        ([0, 0, 0, 0], "CARD"),
-        ([1, 2, 3, 4], "TAG"),
-        ([5, 6, 7, 8], "CARD"),
+        ([132, 35, 165, 229], "ACCEPTED CARD - SERVICE ENGINEER"),
+         ([105, 126, 202, 6], "ACCEPTED CARD - ADMIN (clean card)"),
+        ([222, 183, 17, 6], "ACCEPTED TAG - ADMIN (clean tag)"),
     ]);
 
     let mut delay = Delay;
@@ -104,14 +102,11 @@ pub fn read() -> Result<()> {
     let vers = mfrc522.version()?;
 
     if vers == 0x91 || vers == 0x92 {
-        println!("MFRC522 Version 1 - {vers}");
+        println!("MFRC522 Version 1 - {vers}\nPROGRAM INITIALIZING (3 seconds...)");
     } else if vers == 0x90 {
-        println!("MFRC522 Version 2 - {vers}");
+        println!("MFRC522 Version 2 - {vers}\nPROGRAM INITIALIZING (3 seconds...)");
     } else if vers == 0x82{
-        println!(
-            "OLDER MFRC522 VERSION - 0x{:x}\nPROGRAM CONTINUING.",
-            vers
-        );
+        println!("OLDER MFRC522 VERSION - {vers}\nPROGRAM INITIALIZING (3 seconds...)");
     } else {
         println!(
             "UNKNOWN MFRC522 VERSION - 0x{:x}\nPROGRAM TERMINATING.",
@@ -128,21 +123,22 @@ pub fn read() -> Result<()> {
 
                 // check if the UID matches any of the known tags/cards in the hashmap for fast lookup and recognition
                 if TAGS_HMAP.contains_key(&uid_array) {
-                    println!("{} DETECTED", TAGS_HMAP[&uid_array]);
+                    println!("{}", TAGS_HMAP[&uid_array]);
                 } else {
                     println!("UNKNOWN TAG/CARD DETECTED - NOT IN DB/HMAP");
                 }
 
                 // this decrypts the card and reads block 1, which should be empty on new cards, but can be used to store data on used cards;
                 // this is just an example of how to read data from a card after authenticating with the default key.
-                handle_authenticate(&mut mfrc522, &uid, |m| {
-                    // read block 1
-                    let data = m.mf_read(1)?;
-                    // print the data - do nothing else. (data can be used later on to store info or run specific commands based on the data read from the card, but for this demo we just print it out)
-                    println!("READ DATA: {:?}", data);
-                    Ok(())
-                })
-                .ok();
+
+                // handle_authenticate(&mut mfrc522, &uid, |m| {
+                //     // read block 1
+                //     let data = m.mf_read(1)?;
+                //     // print the data - do nothing else. (data can be used later on to store info or run specific commands based on the data read from the card, but for this demo we just print it out)
+                //      println!("READ DATA: {:?}", data);    
+                // Ok(())
+                // })
+                // .ok();
             }
         }
 
