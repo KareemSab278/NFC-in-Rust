@@ -29,7 +29,7 @@ use hal::Delay;
 use mfrc522::comm::{Interface, blocking::spi::SpiInterface};
 use mfrc522::{Initialized, Mfrc522};
 
-const SCAN_DELAY_MS: u16 = 1000;
+const SCAN_DELAY_MS: u16 = 500;
 const OPERATING_SYSTEM: &str = std::env::consts::OS;
 
 fn get_spi() -> Result<SpidevDevice, bool> {
@@ -57,10 +57,10 @@ fn is_linux_os() -> Result<bool> {
     Ok(true) // os is linux
 }
 
-pub fn read() -> Result<()> {
+pub fn read() -> Result<bool> {
     
     if !is_linux_os()? {
-        return Ok(());
+        return Ok(false);
     }
 
     #[allow(nonstandard_style)]
@@ -112,7 +112,7 @@ pub fn read() -> Result<()> {
             "UNKNOWN MFRC522 VERSION - 0x{:x}\nPROGRAM TERMINATING.",
             vers
         );
-         return Ok(()); // kill the program if we cant find version; no point continuing if we possibly cant talk to the card reader
+        return Ok(false); // kill the program if we cant find version; no point continuing if we possibly cant talk to the card reader
     }
 
     loop {
@@ -121,12 +121,14 @@ pub fn read() -> Result<()> {
                 let uid_array: [u8; 4] = uid.as_bytes().try_into().unwrap();
                 println!("SCANNED UID FOUND: {:?}", uid_array);
 
-                // check if the UID matches any of the known tags/cards in the hashmap for fast lookup and recognition
-                if TAGS_HMAP.contains_key(&uid_array) {
+                let found = TAGS_HMAP.contains_key(&uid_array);
+                if found {
                     println!("{}", TAGS_HMAP[&uid_array]);
                 } else {
                     println!("UNKNOWN TAG/CARD DETECTED - NOT IN DB/HMAP");
                 }
+
+                return Ok(found);
 
                 // this decrypts the card and reads block 1, which should be empty on new cards, but can be used to store data on used cards;
                 // this is just an example of how to read data from a card after authenticating with the default key.
