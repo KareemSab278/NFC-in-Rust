@@ -1,0 +1,141 @@
+//! Raspberry Pi 4 demo.
+//! This example makes use the `std` feature
+//! and `anyhow` dependency to make error handling more ergonomic.
+//!
+//! # Connections
+//!
+//! - 3V3    = VCC
+//! - GND    = GND
+//! - GPIO9  = MISO
+//! - GPIO10 = MOSI
+//! - GPIO11 = SCLK (SCK)
+//! - GPIO22 = NSS  (SDA)
+//!
+
+// https://gitlab.com/jspngh/mfrc522/-/tree/main/examples/rpi4
+
+use linux_embedded_hal as hal;
+
+use std::collections::HashMap;
+use std::fs::File;
+use std::hash::Hash;
+use std::io::Write;
+
+use anyhow::Result;
+use embedded_hal::delay::DelayNs;
+use embedded_hal_bus::spi::ExclusiveDevice;
+use hal::spidev::{SpiModeFlags, SpidevOptions};
+use hal::{Delay, SpidevBus, SysfsPin};
+use mfrc522::comm::{Interface, blocking::spi::SpiInterface};
+use mfrc522::{Initialized, Mfrc522};
+
+const PIN: u8 = 22;
+const SCAN_DELAY_MS: u16 = 1000;
+
+pub fn read() -> Result<()> {
+    #[allow(nonstandard_style)]
+
+    let TAGS_HMAP = HashMap::from([ // fake vals for now. add real ones ltr
+        ([0, 0, 0, 0], "TAG"),
+        ([0, 0, 0, 0], "CARD"),
+        ([1, 2, 3, 4], "TAG"),
+        ([5, 6, 7, 8], "CARD"),
+    ]);
+
+    let mut delay = Delay;
+
+    let mut spi = SpidevBus::open("/dev/spidev0.0").expect("Failed to open SPI device");
+
+    // do not change this, these settings are required for the MFRC522 to work properly. (max speed is 10MHz, but we can go lower for stability)
+    let options = SpidevOptions::new()
+        .max_speed_hz(1_000_000)
+        .mode(SpiModeFlags::SPI_MODE_0 | SpiModeFlags::SPI_NO_CS)
+        .build();
+
+    spi.configure(&options)
+        .expect("Failed to configure SPI device");
+
+    // software-controlled chip select pin
+    let pin = SysfsPin::new(PIN as u64);
+    pin.export().expect("Failed to export pin");
+
+    while !pin.is_exported() {}
+    // tells embedded targets to wait 500ms because possible race condition from is_exported
+    delay.delay_ms(500u32);
+
+    // check pin exists and ready
+    let pin = pin
+        .into_output_pin(embedded_hal::digital::PinState::High)
+        .expect("Failed to set pin state");
+
+    let spi = ExclusiveDevice::new(spi, pin, Delay)?; // set the chip select pin and delay for the exclusive device
+    let itf = SpiInterface::new(spi);
+    let mut mfrc522 = Mfrc522::new(itf).init()?;
+
+    let vers = mfrc522.version()?;
+
+    println!("MFRC522 VERSION: 0x{:x}", vers);
+
+    if vers == 0x91 || vers == 0x92 {
+        println!("MFRC522 Version 1");
+    } else if vers == 0x90 {
+        println!("MFRC522 Version 2");
+    } else {
+        println!(
+            "UNKNOWN MFRC522 VERSION - 0x{:x} \n PROGRAM TERMINATED.",
+            vers
+        );
+        return Ok(()); // kill the program if we cant find version; no point continuing if we possibly cant talk to the card reader
+    }
+
+    loop {
+        if let Ok(atqa) = mfrc522.reqa() {
+            if let Ok(uid) = mfrc522.select(&atqa) {
+                let uid_array = uid.as_bytes(); // get the UID as a byte array [u8; 4] (fixed size on stack tot: 4x4 bytes)
+                println!("SCANNED UID FOUND: {:?}", uid_array);
+
+                // check if the UID matches any of the known tags/cards in the hashmap for fast lookup and recognition
+                if TAGS_HMAP.contains_key(uid_array) {
+                    println!("{} DETECTED", TAGS_HMAP[uid_array]);
+                } else {
+                    println!("UNKNOWN TAG/CARD DETECTED - NOT IN DB/HMAP");
+                }
+
+                // this decrypts the card and reads block 1, which should be empty on new cards, but can be used to store data on used cards;
+                // this is just an example of how to read data from a card after authenticating with the default key.
+                handle_authenticate(&mut mfrc522, &uid, |m| {
+                    // read block 1
+                    let data = m.mf_read(1)?;
+                    // print the data - do nothing else. (data can be used later on to store info or run specific commands based on the data read from the card, but for this demo we just print it out)
+                    println!("READ DATA: {:?}", data);
+                    Ok(())
+                })
+                .ok();
+            }
+        }
+
+        delay.delay_ms(SCAN_DELAY_MS as u32);
+    }
+}
+
+fn handle_authenticate<E, COMM: Interface<Error = E>, F>( // this block is out of my technical expertise...
+    mfrc522: &mut Mfrc522<COMM, Initialized>,
+    uid: &mfrc522::Uid,
+    action: F,
+) -> Result<()>
+where
+    F: FnOnce(&mut Mfrc522<COMM, Initialized>) -> Result<()>,
+    E: std::fmt::Debug + std::marker::Sync + std::marker::Send + 'static,
+{
+    // Use *default* key, this should work on new/empty cards
+    let key = [0xFF; 6];
+    if mfrc522.mf_authenticate(uid, 1, &key).is_ok() {
+        action(mfrc522)?;
+    } else {
+        println!("Could not authenticate");
+    }
+
+    mfrc522.hlta()?;
+    mfrc522.stop_crypto1()?;
+    Ok(())
+}

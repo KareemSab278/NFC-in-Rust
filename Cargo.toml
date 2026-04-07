@@ -1,0 +1,12 @@
+[package]
+name = "rust_nfc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embedded-hal = "1.0"
+linux-embedded-hal = "0.4.0"
+embedded-hal-bus = "0.2.0"
+anyhow = "1.0"
+
+mfrc522 = { version = "0.8", features = ["std"] }
