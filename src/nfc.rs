@@ -9,34 +9,32 @@
 //! - GPIO9  = MISO
 //! - GPIO10 = MOSI
 //! - GPIO11 = SCLK (SCK)
-//! - GPIO22 = NSS  (SDA)
+//! - GPIO8 = NSS  (SDA)
 //!
 // CREDIT: based on code found in this repo -> https://gitlab.com/jspngh/mfrc522/-/tree/main/examples/rpi4
 
 use linux_embedded_hal as hal;
 
 use std::collections::HashMap;
+use std::convert::TryInto;
 
 use std::thread;
 use std::time::Duration;
 
-use embedded_hal::digital::PinState;
-
 use anyhow::Result;
 use embedded_hal::delay::DelayNs;
-use embedded_hal_bus::spi::ExclusiveDevice;
 use hal::spidev::{SpiModeFlags, SpidevOptions};
-use hal::{Delay, SpidevBus, SysfsPin};
+use hal::SpidevDevice;
+use hal::Delay;
 use mfrc522::comm::{Interface, blocking::spi::SpiInterface};
 use mfrc522::{Initialized, Mfrc522};
 
-const GPIO_PIN: u8 = 22;
 const SCAN_DELAY_MS: u16 = 1000;
 const OPERATING_SYSTEM: &str = std::env::consts::OS;
 
-fn get_spi() -> Result<SpidevBus, bool> {
-    let spi = match SpidevBus::open("/dev/spidev0.0") {
-        Ok(spi) => spi, // return the spi device if we successfully opened it as a SpidevBus
+fn get_spi() -> Result<SpidevDevice, bool> {
+    let spi = match SpidevDevice::open("/dev/spidev0.0") {
+        Ok(spi) => spi, // return the SPI device if we successfully opened it as a SpidevDevice
         Err(e) => {
             println!("Failed to open SPI device: {:?}", e);
             return Err(false);
@@ -79,7 +77,8 @@ pub fn read() -> Result<()> {
     // do not change this, these settings are required for the MFRC522 to work properly. (max speed is 10MHz, but we can go lower for stability)
     let options = SpidevOptions::new()
         .max_speed_hz(1_000_000)
-        .mode(SpiModeFlags::SPI_MODE_0 | SpiModeFlags::SPI_NO_CS)
+        // .mode(SpiModeFlags::SPI_MODE_0 | SpiModeFlags::SPI_NO_CS)
+        .mode(SpiModeFlags::SPI_MODE_0)
         .build();
 
     // i put it into a loop to avoid crashes that kill the process if the SPI device is not ready when we try to open it.
@@ -99,48 +98,37 @@ pub fn read() -> Result<()> {
     spi.configure(&options)
         .expect("Failed to configure SPI device");
 
-    // software-controlled chip select pin
-    let pin = SysfsPin::new(GPIO_PIN as u64);
-    pin.export().expect("Failed to export pin");
-
-    while !pin.is_exported() {}
-    // tells embedded targets to wait 500ms because possible race condition from is_exported
-    delay.delay_ms(500u32);
-
-    // check pin exists and ready
-    let pin = pin
-        .into_output_pin(PinState::High)
-        .expect("Failed to set pin state");
-
-    let spi = ExclusiveDevice::new(spi, pin, Delay)?; // set the chip select pin and delay for the exclusive device
     let itf = SpiInterface::new(spi);
     let mut mfrc522 = Mfrc522::new(itf).init()?;
 
     let vers = mfrc522.version()?;
 
-    println!("MFRC522 VERSION: 0x{:x}", vers);
-
     if vers == 0x91 || vers == 0x92 {
-        println!("MFRC522 Version 1");
+        println!("MFRC522 Version 1 - {vers}");
     } else if vers == 0x90 {
-        println!("MFRC522 Version 2");
-    } else {
+        println!("MFRC522 Version 2 - {vers}");
+    } else if vers == 0x82{
         println!(
-            "UNKNOWN MFRC522 VERSION - 0x{:x} \n PROGRAM TERMINATED.",
+            "OLDER MFRC522 VERSION - 0x{:x}\nPROGRAM CONTINUING.",
             vers
         );
-        return Ok(()); // kill the program if we cant find version; no point continuing if we possibly cant talk to the card reader
+    } else {
+        println!(
+            "UNKNOWN MFRC522 VERSION - 0x{:x}\nPROGRAM TERMINATING.",
+            vers
+        );
+         return Ok(()); // kill the program if we cant find version; no point continuing if we possibly cant talk to the card reader
     }
 
     loop {
         if let Ok(atqa) = mfrc522.reqa() {
             if let Ok(uid) = mfrc522.select(&atqa) {
-                let uid_array = uid.as_bytes(); // get the UID as a byte array [u8; 4] (fixed size on stack tot: 4x4 bytes)
+                let uid_array: [u8; 4] = uid.as_bytes().try_into().unwrap();
                 println!("SCANNED UID FOUND: {:?}", uid_array);
 
                 // check if the UID matches any of the known tags/cards in the hashmap for fast lookup and recognition
-                if TAGS_HMAP.contains_key(uid_array) {
-                    println!("{} DETECTED", TAGS_HMAP[uid_array]);
+                if TAGS_HMAP.contains_key(&uid_array) {
+                    println!("{} DETECTED", TAGS_HMAP[&uid_array]);
                 } else {
                     println!("UNKNOWN TAG/CARD DETECTED - NOT IN DB/HMAP");
                 }
@@ -172,7 +160,6 @@ where
     F: FnOnce(&mut Mfrc522<COMM, Initialized>) -> Result<()>,
     E: std::fmt::Debug + std::marker::Sync + std::marker::Send + 'static,
 {
-    // Use *default* key, this should work on new/empty cards
     let key = [0xFF; 6];
     if mfrc522.mf_authenticate(uid, 1, &key).is_ok() {
         action(mfrc522)?;
